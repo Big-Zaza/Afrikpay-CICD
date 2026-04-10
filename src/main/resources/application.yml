@@ -1,6 +1,5 @@
 server:
-  port: ${CONTAINER_PORT}
-
+  port: ${CONTAINER_PORT:8080}
 spring:
   application:
     name: hello-world
