@@ -6,52 +6,70 @@ Pipeline CI/CD complet pour une application Spring Boot : à chaque push sur `ma
 
 ## Table des matières
 
-1. [Architecture du pipeline](#architecture-du-pipeline)
-2. [Stack technique](#stack-technique)
-3. [Structure du projet](#structure-du-projet)
-4. [Prérequis](#prérequis)
-5. [Configuration des secrets GitHub](#configuration-des-secrets-github)
-6. [Préparation du serveur VPS](#préparation-du-serveur-vps)
-7. [Lancement du pipeline](#lancement-du-pipeline)
-8. [Vérification du déploiement](#vérification-du-déploiement)
+1. [Choix de l'outil CI/CD](#choix-de-loutil-cicd)
+2. [Architecture du pipeline](#architecture-du-pipeline)
+3. [Stack technique](#stack-technique)
+4. [Structure du projet](#structure-du-projet)
+5. [Prérequis](#prérequis)
+6. [Configuration des secrets GitHub](#configuration-des-secrets-github)
+7. [Préparation du serveur VPS](#préparation-du-serveur-vps)
+8. [Lancement du pipeline](#lancement-du-pipeline)
+9. [Vérification du déploiement](#vérification-du-déploiement)
+
+---
+
+## Choix de l'outil CI/CD
+
+Le sujet laisse le choix de l'outil CI/CD (Jenkins, GitLab CI, GitHub Actions…). **GitHub Actions** a été retenu pour les raisons suivantes :
+
+| Critère | Jenkins | GitHub Actions |
+|---|---|---|
+| **Infrastructure** | Serveur Jenkins à installer, maintenir et sécuriser soi-même | SaaS — zéro serveur à gérer, focus uniquement sur le pipeline |
+| **Plugins** | « Enfer des plugins » : incompatibilités fréquentes, failles de sécurité, mises à jour manuelles | Actions versionnées et isolées, écosystème stable via le Marketplace |
+| **Intégration Git** | Webhook externe à configurer entre Jenkins et GitHub | Natif — le pipeline connaît les commits, branches et PR sans configuration |
+| **Scalabilité** | Agents/nœuds à provisionner manuellement | Runners hébergés auto-scalables (builds parallèles sans effort) |
+| **Coût** | Gratuit mais coût du serveur + maintenance | Gratuit pour les dépôts publics, 2 000 min/mois pour les dépôts privés |
+| **Configuration** | Jenkinsfile + interface web | Fichier YAML unique dans le dépôt (`.github/workflows/`) |
+
+> **En résumé :** GitHub Actions élimine la charge opérationnelle liée à Jenkins (serveur, plugins, webhooks) tout en offrant une intégration native avec GitHub et une scalabilité automatique.
 
 ---
 
 ## Architecture du pipeline
 
-Le pipeline se déclenche à chaque push sur la branche `master` et exécute 6 étapes dans l'ordre :
+Le pipeline suit une approche **DevSecOps** — la sécurité est intégrée directement dans la chaîne CI/CD, pas ajoutée après coup. Il se déclenche à chaque push sur `master` et exécute 6 étapes séquentielles :
 
 ```
 Push sur master
     │
     ▼
 ┌──────────────────┐
-│ 1. Build & Test  │  Compilation Maven + tests unitaires
+│ 1. Build & Test  │  Compilation Maven + tests unitaires (JUnit)
 └────────┬─────────┘
          │
          ▼
 ┌──────────────────┐
-│ 2. Analyse code  │  Scan de vulnérabilités (Trivy + Snyk)
+│ 2. Analyse code  │  Scan vulnérabilités : Trivy (CVE) + Snyk (dépendances)
 └────────┬─────────┘
          │
          ▼
 ┌──────────────────┐
-│ 3. Dockerisation │  Build de l'image Docker (multi-stage)
+│ 3. Dockerisation │  Build multi-stage (Maven → JRE Alpine) + scan image Snyk
 └────────┬─────────┘
          │
          ▼
 ┌──────────────────┐
-│ 4. Registry      │  Push de l'image sur Docker Hub
+│ 4. Registry      │  Push vers Docker Hub (tag SHA + latest)
 └────────┬─────────┘
          │
          ▼
 ┌──────────────────┐
-│ 5. Déploiement   │  SSH → docker compose pull + up
+│ 5. Déploiement   │  SSH → docker compose pull && up -d
 └────────┬─────────┘
          │
          ▼
 ┌──────────────────┐
-│ 6. Notification  │  Statut de chaque étape via Slack
+│ 6. Notification  │  Rapport complet via Slack (Block Kit)
 └──────────────────┘
 ```
 

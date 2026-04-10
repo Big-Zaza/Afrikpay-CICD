@@ -34,6 +34,7 @@ jobs:
     needs: build-test
     outputs:
       trivy-summary: ${{ steps.trivy-report.outputs.summary }}
+      trivy-cve-list: ${{ steps.trivy-report.outputs.cve_list }}
       snyk-summary: ${{ steps.snyk-report.outputs.summary }}
     steps:
       - uses: actions/checkout@v4
@@ -44,18 +45,33 @@ jobs:
           scan-type: "fs"
           scan-ref: "."
           severity: "CRITICAL,HIGH"
-          output: trivy-results.txt
+          format: "json"
+          output: trivy-results.json
 
       - name: Résumé Trivy
         id: trivy-report
         if: always()
         run: |
-          if [ -f trivy-results.txt ] && [ -s trivy-results.txt ]; then
-            CRITICAL=$(grep -c "CRITICAL" trivy-results.txt 2>/dev/null || echo "0")
-            HIGH=$(grep -c "HIGH" trivy-results.txt 2>/dev/null || echo "0")
-            echo "summary=${CRITICAL} critiques, ${HIGH} hautes" >> $GITHUB_OUTPUT
+          if [ -f trivy-results.json ] && [ -s trivy-results.json ]; then
+            python3 -c "
+          import json, os
+          data = json.load(open('trivy-results.json'))
+          vulns = []
+          for r in data.get('Results', []):
+            for v in (r.get('Vulnerabilities') or []):
+              vulns.append((v.get('Severity',''), v.get('VulnerabilityID',''), v.get('PkgName','').replace('\"','')))
+          crit = [v for v in vulns if v[0]=='CRITICAL']
+          high = [v for v in vulns if v[0]=='HIGH']
+          summary = str(len(crit)) + ' critiques, ' + str(len(high)) + ' hautes'
+          lines = ['  · ' + c + ' [' + s + '] ' + p for s,c,p in (crit+high)[:5]]
+          cve_list = (chr(92)+'n').join(lines) if lines else '  Aucune vulnerabilite detectee'
+          if len(crit+high) > 5:
+            cve_list += (chr(92)+'n') + '  ... et ' + str(len(crit+high)-5) + ' autres'
+          open(os.environ['GITHUB_OUTPUT'], 'a').write('summary=' + summary + chr(10) + 'cve_list=' + cve_list + chr(10))
+          "
           else
             echo "summary=Aucune vulnérabilité détectée" >> $GITHUB_OUTPUT
+            echo "cve_list=  Aucune vulnérabilité détectée" >> $GITHUB_OUTPUT
           fi
 
       - name: Scan des dépendances (Snyk)
@@ -185,7 +201,41 @@ jobs:
         with:
           payload: |
             {
-              "text": "🚀 *Pipeline CI/CD* — `${{ github.repository }}`\n\n${{ needs.build-test.result == 'success' && '✅' || needs.build-test.result == 'skipped' && '⏭️' || '❌' }}  *Build & Test*\n${{ needs.analyse-code.result == 'success' && '✅' || needs.analyse-code.result == 'skipped' && '⏭️' || '❌' }}  *Analyse de code*\n${{ needs.dockerisation.result == 'success' && '✅' || needs.dockerisation.result == 'skipped' && '⏭️' || '❌' }}  *Dockerisation*\n${{ needs.registry.result == 'success' && '✅' || needs.registry.result == 'skipped' && '⏭️' || '❌' }}  *Registry*\n${{ needs.deploiement.result == 'success' && '✅' || needs.deploiement.result == 'skipped' && '⏭️' || '❌' }}  *Déploiement*\n\n📊 Trivy : ${{ needs.analyse-code.outputs.trivy-summary }}\n📊 Snyk (code) : ${{ needs.analyse-code.outputs.snyk-summary }}\n📊 Snyk (image) : ${{ needs.dockerisation.outputs.snyk-docker-summary }}\n\n📌 Commit : `${{ github.sha }}`\n👤 Auteur : ${{ github.actor }}\n🔗 Détails : ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+              "blocks": [
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": ":rocket: *CI/CD Pipeline* — <${{ github.server_url }}/${{ github.repository }}|${{ github.repository }}>"
+                  }
+                },
+                { "type": "divider" },
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "${{ needs.build-test.result == 'success' && ':large_green_circle:' || needs.build-test.result == 'skipped' && ':white_circle:' || ':red_circle:' }}  *Build & Test*\n${{ needs.analyse-code.result == 'success' && ':large_green_circle:' || needs.analyse-code.result == 'skipped' && ':white_circle:' || ':red_circle:' }}  *Analyse de code*\n${{ needs.dockerisation.result == 'success' && ':large_green_circle:' || needs.dockerisation.result == 'skipped' && ':white_circle:' || ':red_circle:' }}  *Dockerisation*\n${{ needs.registry.result == 'success' && ':large_green_circle:' || needs.registry.result == 'skipped' && ':white_circle:' || ':red_circle:' }}  *Registry*\n${{ needs.deploiement.result == 'success' && ':large_green_circle:' || needs.deploiement.result == 'skipped' && ':white_circle:' || ':red_circle:' }}  *Déploiement*"
+                  }
+                },
+                { "type": "divider" },
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "*Security Report*\n\n:shield: *Trivy* — ${{ needs.analyse-code.outputs.trivy-summary }}\n${{ needs.analyse-code.outputs.trivy-cve-list }}\n\n:mag: *Snyk (code)* — ${{ needs.analyse-code.outputs.snyk-summary }}\n:mag: *Snyk (image)* — ${{ needs.dockerisation.outputs.snyk-docker-summary }}"
+                  }
+                },
+                { "type": "divider" },
+                {
+                  "type": "context",
+                  "elements": [
+                    {
+                      "type": "mrkdwn",
+                      "text": ":pushpin: `${{ github.sha }}` · :bust_in_silhouette: ${{ github.actor }} · <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View run>"
+                    }
+                  ]
+                }
+              ]
             }
         env:
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
