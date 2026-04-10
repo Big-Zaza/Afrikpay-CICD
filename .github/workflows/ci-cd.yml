@@ -32,21 +32,51 @@ jobs:
     name: Analyse de code
     runs-on: ubuntu-latest
     needs: build-test
+    outputs:
+      trivy-summary: ${{ steps.trivy-report.outputs.summary }}
+      snyk-summary: ${{ steps.snyk-report.outputs.summary }}
     steps:
       - uses: actions/checkout@v4
+
       - name: Scan des fichiers sources (Trivy)
         uses: aquasecurity/trivy-action@master
         with:
           scan-type: "fs"
           scan-ref: "."
           severity: "CRITICAL,HIGH"
+          output: trivy-results.txt
+
+      - name: Résumé Trivy
+        id: trivy-report
+        if: always()
+        run: |
+          if [ -f trivy-results.txt ] && [ -s trivy-results.txt ]; then
+            CRITICAL=$(grep -c "CRITICAL" trivy-results.txt 2>/dev/null || echo "0")
+            HIGH=$(grep -c "HIGH" trivy-results.txt 2>/dev/null || echo "0")
+            echo "summary=${CRITICAL} critiques, ${HIGH} hautes" >> $GITHUB_OUTPUT
+          else
+            echo "summary=Aucune vulnérabilité détectée" >> $GITHUB_OUTPUT
+          fi
+
       - name: Scan des dépendances (Snyk)
+        id: snyk-scan
         uses: snyk/actions/maven@master
         continue-on-error: true
         env:
           SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
         with:
-          args: --severity-threshold=high
+          args: --severity-threshold=high --json-file-output=snyk-results.json
+
+      - name: Résumé Snyk
+        id: snyk-report
+        if: always()
+        run: |
+          if [ -f snyk-results.json ]; then
+            TOTAL=$(cat snyk-results.json | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('uniqueCount',len(d.get('vulnerabilities',[]))))" 2>/dev/null || echo "?")
+            echo "summary=${TOTAL} vulnérabilités trouvées" >> $GITHUB_OUTPUT
+          else
+            echo "summary=Aucune vulnérabilité détectée" >> $GITHUB_OUTPUT
+          fi
   # -------------------------------------------------------
   # 3. Dockerisation
   #    Création de l'image Docker optimisée (multi-stage)
@@ -55,18 +85,38 @@ jobs:
     name: Dockerisation
     runs-on: ubuntu-latest
     needs: analyse-code
+    outputs:
+      snyk-docker-summary: ${{ steps.snyk-docker-report.outputs.summary }}
     steps:
       - uses: actions/checkout@v4
       - name: Build de l'image Docker
         run: docker build -t ${{ env.IMAGE_NAME }}:${{ github.sha }} -t ${{ env.IMAGE_NAME }}:latest .
       - name: Scan de l'image Docker (Snyk)
+        id: snyk-docker-scan
         uses: snyk/actions/docker@master
         continue-on-error: true
         env:
           SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
         with:
           image: ${{ env.IMAGE_NAME }}:latest
-          args: --severity-threshold=high
+          args: --severity-threshold=high --json-file-output=snyk-docker-results.json
+      - name: Résumé Snyk Docker
+        id: snyk-docker-report
+        if: always()
+        run: |
+          if [ -f snyk-docker-results.json ]; then
+            TOTAL=$(python3 -c "
+          import sys,json
+          data=json.load(open('snyk-docker-results.json'))
+          if isinstance(data, list):
+            total=sum(len(d.get('vulnerabilities',[])) for d in data)
+          else:
+            total=len(data.get('vulnerabilities',[]))
+          print(total)" 2>/dev/null || echo "?")
+            echo "summary=${TOTAL} vulnérabilités dans l'image" >> $GITHUB_OUTPUT
+          else
+            echo "summary=Aucune vulnérabilité détectée" >> $GITHUB_OUTPUT
+          fi
       - name: Sauvegarder l'image pour le job suivant
         run: docker save ${{ env.IMAGE_NAME }}:latest | gzip > image.tar.gz
       - name: Upload de l'image
@@ -115,6 +165,7 @@ jobs:
           host: ${{ secrets.VPS_HOST }}
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
+          timeout: 60s
           script: |
             cd ${{ secrets.DEPLOY_PATH }}
             docker compose pull
@@ -134,7 +185,7 @@ jobs:
         with:
           payload: |
             {
-              "text": "Pipeline CI/CD — `${{ github.repository }}`\n\n• Build & Test : ${{ needs.build-test.result }}\n• Analyse de code : ${{ needs.analyse-code.result }}\n• Dockerisation : ${{ needs.dockerisation.result }}\n• Registry : ${{ needs.registry.result }}\n• Déploiement : ${{ needs.deploiement.result }}\n\nCommit : `${{ github.sha }}`\nAuteur : ${{ github.actor }}\nDétails : ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+              "text": "🚀 *Pipeline CI/CD* — `${{ github.repository }}`\n\n${{ needs.build-test.result == 'success' && '✅' || needs.build-test.result == 'skipped' && '⏭️' || '❌' }}  *Build & Test*\n${{ needs.analyse-code.result == 'success' && '✅' || needs.analyse-code.result == 'skipped' && '⏭️' || '❌' }}  *Analyse de code*\n${{ needs.dockerisation.result == 'success' && '✅' || needs.dockerisation.result == 'skipped' && '⏭️' || '❌' }}  *Dockerisation*\n${{ needs.registry.result == 'success' && '✅' || needs.registry.result == 'skipped' && '⏭️' || '❌' }}  *Registry*\n${{ needs.deploiement.result == 'success' && '✅' || needs.deploiement.result == 'skipped' && '⏭️' || '❌' }}  *Déploiement*\n\n📊 Trivy : ${{ needs.analyse-code.outputs.trivy-summary }}\n📊 Snyk (code) : ${{ needs.analyse-code.outputs.snyk-summary }}\n📊 Snyk (image) : ${{ needs.dockerisation.outputs.snyk-docker-summary }}\n\n📌 Commit : `${{ github.sha }}`\n👤 Auteur : ${{ github.actor }}\n🔗 Détails : ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
             }
         env:
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
