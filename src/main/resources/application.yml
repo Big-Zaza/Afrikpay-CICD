@@ -1,0 +1,6 @@
+server:
+  port: ${CONTAINER_PORT}
+
+spring:
+  application:
+    name: hello-world
