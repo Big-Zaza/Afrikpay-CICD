@@ -128,9 +128,6 @@ C'est possible parce que le serveur contient déjà un fichier `docker-compose.y
 - Le nombre de vulnérabilités Snyk (code + image)
 - Le lien vers le run GitHub Actions
 
-<!-- Capture d'écran : notification Slack -->
-<!-- ![Notification Slack](docs/screenshots/slack-notification.png) -->
-
 ---
 
 ## Stack technique
@@ -213,8 +210,8 @@ Aller dans le dépôt GitHub → **Settings** → **Secrets and variables** → 
 | `SLACK_WEBHOOK_URL` | URL du webhook Slack                                |
 | `SNYK_TOKEN`        | Token API Snyk (snyk.io → Account Settings)         |
 
-<!-- Capture d'écran : page des secrets GitHub -->
-<!-- ![Secrets GitHub](docs/screenshots/github-secrets.png) -->
+<img width="1081" height="772" alt="image" src="https://github.com/user-attachments/assets/13ae47df-b6b0-47e6-be04-478d292b3f62" />
+
 
 ---
 
@@ -247,8 +244,6 @@ chmod +x /tmp/setup-server.sh
 
 À la fin de l'exécution, le script affiche la **clé privée SSH**. Copier son contenu dans le secret GitHub `VPS_SSH_KEY`.
 
-<!-- Capture d'écran : exécution du script sur le VPS -->
-<!-- ![Setup serveur](docs/screenshots/setup-server.png) -->
 
 ### Étape 2 : Créer le fichier `docker-compose.yml` sur le serveur
 
@@ -284,7 +279,7 @@ nano /home/cicd/hello-world/.env
 Contenu :
 
 ```env
-IMAGE_NAME=<votre-user-dockerhub>/<nom-image>
+IMAGE_NAME=<user-dockerhub>/hello-world
 CONTAINER_NAME=hello-world
 SERVER_PORT=8080
 CONTAINER_PORT=8080
@@ -292,13 +287,12 @@ CONTAINER_PORT=8080
 
 | Variable         | Description                                           |
 |------------------|-------------------------------------------------------|
-| `IMAGE_NAME`     | Nom complet de l'image Docker Hub (ex: `bigzaza/hello-world`) |
+| `IMAGE_NAME`     | Nom complet de l'image Docker Hub                     |
 | `CONTAINER_NAME` | Nom du conteneur Docker sur le serveur                |
 | `SERVER_PORT`    | Port exposé sur le serveur (accessible depuis l'extérieur) |
 | `CONTAINER_PORT` | Port interne du conteneur (celui de Spring Boot)      |
 
-<!-- Capture d'écran : fichiers sur le serveur (ls -la) -->
-<!-- ![Fichiers serveur](docs/screenshots/server-files.png) -->
+<img width="866" height="233" alt="image" src="https://github.com/user-attachments/assets/60c9b92b-4e88-4e8d-937a-51fe749284db" />
 
 ---
 
@@ -314,16 +308,12 @@ git push origin master
 
 Suivre l'exécution dans l'onglet **Actions** du dépôt GitHub.
 
-<!-- Capture d'écran : pipeline en cours d'exécution -->
-<!-- ![Pipeline en cours](docs/screenshots/pipeline-running.png) -->
-
-<!-- Capture d'écran : détail d'un job réussi -->
-<!-- ![Job réussi](docs/screenshots/job-success.png) -->
+<img width="1900" height="875" alt="image" src="https://github.com/user-attachments/assets/0a312777-2a60-47b9-a2ad-2006b6e3bf53" />
 
 Une fois le pipeline terminé, **vérifier le statut sur Slack** : la notification indique le résultat de chaque étape, les CVE détectées et un lien direct vers le run.
 
-<!-- Capture d'écran : notification Slack finale -->
-<!-- ![Notification Slack](docs/screenshots/slack-final.png) -->
+<img width="990" height="473" alt="image" src="https://github.com/user-attachments/assets/e9e88514-89c3-4d19-b500-b04c39fcd4a5" />
+
 
 ---
 
@@ -349,6 +339,9 @@ Le conteneur `hello-world` doit apparaître avec le statut `Up` :
 docker logs hello-world
 ```
 
+<img width="1913" height="896" alt="image" src="https://github.com/user-attachments/assets/6de080c7-9148-4be9-8c51-e5d34933405c" />
+
+
 On doit voir le démarrage de Spring Boot sans erreur.
 
 ### 3. Tester l'application
@@ -365,11 +358,10 @@ Réponse attendue :
 Hello World!
 ```
 
-<!-- Capture d'écran : résultat du curl -->
-<!-- ![Test curl](docs/screenshots/curl-test.png) -->
+<img width="1017" height="138" alt="image" src="https://github.com/user-attachments/assets/11677929-3fc8-4252-b438-8c73617ff5cd" />
 
 ---
 
 ## Auteur
 
-Projet réalisé dans le cadre du test technique Lead DevOps.
+Projet réalisé par Junior Ntui Etta dans le cadre du test technique Lead DevOps a Afrikpay.
