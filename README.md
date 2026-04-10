@@ -340,13 +340,8 @@ docker ps
 
 Le conteneur `hello-world` doit apparaître avec le statut `Up` :
 
-```
-CONTAINER ID   IMAGE                        STATUS         PORTS
-abc123         bigzaza/hello-world:latest   Up 2 minutes   0.0.0.0:8080->8080/tcp
-```
+<img width="1919" height="311" alt="image" src="https://github.com/user-attachments/assets/57591097-855f-4c74-abb9-8ef1ad8a9dfc" />
 
-<!-- Capture d'écran : docker ps sur le serveur -->
-<!-- ![Docker PS](docs/screenshots/docker-ps.png) -->
 
 ### 2. Vérifier les logs du conteneur
 
