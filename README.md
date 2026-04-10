@@ -1,6 +1,6 @@
 # Pipeline CI/CD — Zero to Deploy
 
-Pipeline CI/CD complet pour une application Spring Boot : à chaque push sur `master`, le code est compilé, testé, analysé, conteneurisé et déployé automatiquement sur un VPS distant.
+Pipeline CI/CD complet pour une application Spring Boot : à chaque push sur `master`, le code est compilé, testé, analysé (sécurité), conteneurisé et déployé automatiquement sur un VPS distant. Une notification Slack résume le résultat de chaque étape.
 
 ---
 
@@ -8,13 +8,14 @@ Pipeline CI/CD complet pour une application Spring Boot : à chaque push sur `ma
 
 1. [Choix de l'outil CI/CD](#choix-de-loutil-cicd)
 2. [Architecture du pipeline](#architecture-du-pipeline)
-3. [Stack technique](#stack-technique)
-4. [Structure du projet](#structure-du-projet)
-5. [Prérequis](#prérequis)
-6. [Configuration des secrets GitHub](#configuration-des-secrets-github)
-7. [Préparation du serveur VPS](#préparation-du-serveur-vps)
-8. [Lancement du pipeline](#lancement-du-pipeline)
-9. [Vérification du déploiement](#vérification-du-déploiement)
+3. [Comment ça marche](#comment-ça-marche)
+4. [Stack technique](#stack-technique)
+5. [Structure du projet](#structure-du-projet)
+6. [Prérequis](#prérequis)
+7. [Configuration des secrets GitHub](#configuration-des-secrets-github)
+8. [Préparation du serveur VPS](#préparation-du-serveur-vps)
+9. [Lancement du pipeline](#lancement-du-pipeline)
+10. [Vérification du déploiement](#vérification-du-déploiement)
 
 ---
 
@@ -69,12 +70,66 @@ Push sur master
          │
          ▼
 ┌──────────────────┐
-│ 6. Notification  │  Rapport complet via Slack (Block Kit)
+│ 6. Notification  │  Rapport complet via Slack
 └──────────────────┘
 ```
 
 <!-- Capture d'écran : vue d'ensemble du pipeline dans GitHub Actions -->
 <!-- ![Pipeline](docs/screenshots/pipeline-overview.png) -->
+
+---
+
+## Comment ça marche
+
+Voici ce qui se passe concrètement à chaque étape du pipeline :
+
+### 1. Build & Test
+
+Le runner GitHub télécharge le code, installe JDK 17, et exécute `mvn clean verify`. Maven compile les sources, lance les tests unitaires JUnit et produit un `.jar` exécutable. Si un test échoue, le pipeline s'arrête immédiatement.
+
+### 2. Analyse de code (DevSecOps)
+
+Deux scans de sécurité sont exécutés en parallèle :
+- **Trivy** scanne les fichiers sources pour détecter les CVE connues (vulnérabilités CRITICAL et HIGH). Le résultat inclut les identifiants CVE et les packages affectés.
+- **Snyk** analyse les dépendances Maven pour identifier les librairies vulnérables.
+
+> Ces scans ne bloquent pas le pipeline (`continue-on-error: true`) mais les résultats sont remontés dans la notification Slack pour visibilité.
+
+### 3. Dockerisation
+
+L'image Docker est construite en **multi-stage** :
+1. **Étape build** : Maven compile le `.jar` dans une image Alpine Maven (~400 Mo)
+2. **Étape finale** : seul le `.jar` est copié dans une image JRE Alpine légère (~80 Mo)
+
+L'image tourne avec un utilisateur non-root (`afrikpay`) pour la sécurité. Une fois construite, Snyk scanne l'image Docker pour détecter les vulnérabilités de l'OS et des couches.
+
+### 4. Registry
+
+L'image est poussée sur Docker Hub avec deux tags :
+- `latest` — pour le déploiement courant
+- `<sha-du-commit>` — pour la traçabilité et les rollbacks
+
+### 5. Déploiement
+
+Le pipeline se connecte au VPS via SSH et exécute :
+```bash
+cd /home/cicd/hello-world    # DEPLOY_PATH sur le serveur
+docker compose pull           # télécharge la nouvelle image depuis Docker Hub
+docker compose up -d          # relance le conteneur avec la nouvelle version
+```
+
+C'est possible parce que le serveur contient déjà un fichier `docker-compose.yml` et un fichier `.env` (voir [Préparation du serveur VPS](#préparation-du-serveur-vps)).
+
+### 6. Notification
+
+À la fin du pipeline (succès ou échec), un message Slack est envoyé avec :
+- Le statut de chaque étape (✅ / ❌ / ⏭️)
+- Les CVE détectées par Trivy (top 3 + compteur)
+- Le nombre de vulnérabilités Snyk (code + image)
+- Le lien vers le run GitHub Actions
+
+<!-- Capture d'écran : notification Slack -->
+<!-- ![Notification Slack](docs/screenshots/slack-notification.png) -->
 
 ---
 
@@ -98,23 +153,23 @@ Push sur master
 .
 ├── .github/
 │   └── workflows/
-│       └── ci-cd.yml              # Pipeline CI/CD
+│       └── ci-cd.yml              # Pipeline CI/CD complet
 ├── src/
 │   ├── main/
-│   │   ├── java/.../              # Code source Java
+│   │   ├── java/.../              # Code source Java (HelloController)
 │   │   └── resources/
 │   │       └── application.yml    # Configuration Spring Boot
 │   └── test/
-│       └── java/.../              # Tests unitaires
-├── .dockerignore
-├── .env.example                   # Modèle de variables d'environnement
+│       └── java/.../              # Tests unitaires (JUnit)
+├── .dockerignore                  # Fichiers exclus du contexte Docker
 ├── .gitignore
-├── docker-compose.yml             # Déploiement sur le serveur
 ├── Dockerfile                     # Image Docker multi-stage
 ├── pom.xml                        # Dépendances Maven
-├── setup-server.sh                # Script d'installation du serveur
+├── setup-server.sh                # Script d'installation automatique du VPS
 └── README.md
 ```
+
+> **Note :** Les fichiers `docker-compose.yml` et `.env` ne sont pas dans le dépôt. Ils sont créés directement sur le serveur VPS lors de la préparation (voir section ci-dessous).
 
 ---
 
@@ -150,11 +205,11 @@ Aller dans le dépôt GitHub → **Settings** → **Secrets and variables** → 
 |---------------------|-----------------------------------------------------|
 | `DOCKER_USERNAME`   | Nom d'utilisateur Docker Hub                        |
 | `DOCKER_PASSWORD`   | Token d'accès Docker Hub                            |
-| `IMAGE_NAME`        | Nom de l'image Docker (ex: hello-world)             |
+| `IMAGE_NAME`        | Nom de l'image Docker (ex: `hello-world`)           |
 | `VPS_HOST`          | Adresse IP du serveur                               |
-| `VPS_USER`          | Utilisateur SSH pour le déploiement                  |
+| `VPS_USER`          | Utilisateur SSH pour le déploiement (ex: `cicd`)    |
 | `VPS_SSH_KEY`       | Clé privée SSH (contenu complet, voir section VPS)  |
-| `DEPLOY_PATH`       | Chemin du répertoire de déploiement sur le serveur   |
+| `DEPLOY_PATH`       | Chemin sur le serveur (ex: `/home/cicd/hello-world`)|
 | `SLACK_WEBHOOK_URL` | URL du webhook Slack                                |
 | `SNYK_TOKEN`        | Token API Snyk (snyk.io → Account Settings)         |
 
@@ -165,60 +220,85 @@ Aller dans le dépôt GitHub → **Settings** → **Secrets and variables** → 
 
 ## Préparation du serveur VPS
 
+### Étape 1 : Exécuter le script d'installation
+
 Le script `setup-server.sh` automatise entièrement la configuration du serveur :
 
 - Mise à jour du système
 - Installation de Docker et Docker Compose
-- Création de l'utilisateur de déploiement avec accès Docker
-- Génération des clés SSH
-- Configuration du firewall (UFW) — ports SSH et 8080
-- Durcissement de la configuration SSH
+- Création de l'utilisateur `cicd` avec accès Docker
+- Génération des clés SSH (ed25519)
+- Configuration du firewall (UFW) — ports 22 et 8080
+- Durcissement SSH (désactivation root login, limitation des tentatives)
 
-### Exécution du script
-
-Se connecter au serveur en root (ou avec sudo) et lancer :
+Se connecter au serveur en root et lancer :
 
 ```bash
 # Copier le script sur le serveur
-scp setup-server.sh root@ip-du-serveur:/tmp/
+scp setup-server.sh root@<ip-du-serveur>:/tmp/
 
 # Se connecter au serveur
-ssh root@ip-du-serveur
+ssh root@<ip-du-serveur>
 
 # Lancer le script
 chmod +x /tmp/setup-server.sh
 /tmp/setup-server.sh
 ```
 
-À la fin de l'exécution, le script affiche la **clé privée SSH** à copier dans le secret GitHub `VPS_SSH_KEY`.
+À la fin de l'exécution, le script affiche la **clé privée SSH**. Copier son contenu dans le secret GitHub `VPS_SSH_KEY`.
 
 <!-- Capture d'écran : exécution du script sur le VPS -->
 <!-- ![Setup serveur](docs/screenshots/setup-server.png) -->
 
-### Fichiers de déploiement
+### Étape 2 : Créer le fichier `docker-compose.yml` sur le serveur
 
-Après l'exécution du script, copier les fichiers nécessaires sur le serveur :
+Ce fichier indique à Docker comment lancer le conteneur. Il est créé directement sur le VPS dans le répertoire de déploiement (`/home/cicd/hello-world`) :
 
 ```bash
-# Depuis votre machine locale
-scp docker-compose.yml <user>@<ip-du-serveur>:<chemin-deploiement>/
+ssh cicd@<ip-du-serveur>
+nano /home/cicd/hello-world/docker-compose.yml
 ```
 
-Créer le fichier `.env` sur le serveur :
+Contenu :
+
+```yaml
+services:
+  app:
+    image: ${IMAGE_NAME}:latest
+    container_name: ${CONTAINER_NAME}
+    ports:
+      - "${SERVER_PORT}:${CONTAINER_PORT}"
+    restart: unless-stopped
+```
+
+**Pourquoi ce fichier n'est pas dans le dépôt ?** Parce qu'il contient des variables d'environnement propres au serveur. Le pipeline exécute `docker compose pull && up -d` sur le serveur, qui lit ce fichier localement.
+
+### Étape 3 : Créer le fichier `.env` sur le serveur
+
+Le fichier `.env` fournit les valeurs des variables utilisées par `docker-compose.yml` :
 
 ```bash
-ssh <user>@<ip-du-serveur>
-nano <chemin-deploiement>/.env
+nano /home/cicd/hello-world/.env
 ```
 
 Contenu :
 
 ```env
 IMAGE_NAME=<votre-user-dockerhub>/<nom-image>
-CONTAINER_NAME=<nom-conteneur>
+CONTAINER_NAME=hello-world
 SERVER_PORT=8080
 CONTAINER_PORT=8080
 ```
+
+| Variable         | Description                                           |
+|------------------|-------------------------------------------------------|
+| `IMAGE_NAME`     | Nom complet de l'image Docker Hub (ex: `bigzaza/hello-world`) |
+| `CONTAINER_NAME` | Nom du conteneur Docker sur le serveur                |
+| `SERVER_PORT`    | Port exposé sur le serveur (accessible depuis l'extérieur) |
+| `CONTAINER_PORT` | Port interne du conteneur (celui de Spring Boot)      |
+
+<!-- Capture d'écran : fichiers sur le serveur (ls -la) -->
+<!-- ![Fichiers serveur](docs/screenshots/server-files.png) -->
 
 ---
 
@@ -237,17 +317,51 @@ Suivre l'exécution dans l'onglet **Actions** du dépôt GitHub.
 <!-- Capture d'écran : pipeline en cours d'exécution -->
 <!-- ![Pipeline en cours](docs/screenshots/pipeline-running.png) -->
 
-<!-- Capture d'écran : détail d'un job -->
+<!-- Capture d'écran : détail d'un job réussi -->
 <!-- ![Job réussi](docs/screenshots/job-success.png) -->
+
+Une fois le pipeline terminé, **vérifier le statut sur Slack** : la notification indique le résultat de chaque étape, les CVE détectées et un lien direct vers le run.
+
+<!-- Capture d'écran : notification Slack finale -->
+<!-- ![Notification Slack](docs/screenshots/slack-final.png) -->
 
 ---
 
 ## Vérification du déploiement
 
-Une fois le pipeline terminé, vérifier que l'application répond :
+Après un pipeline réussi (toutes les étapes ✅ sur Slack), vérifier que l'application tourne sur le serveur.
+
+### 1. Vérifier que le conteneur est actif
 
 ```bash
-curl http://<ip-du-serveur>:<port>/
+ssh cicd@<ip-du-serveur>
+docker ps
+```
+
+Le conteneur `hello-world` doit apparaître avec le statut `Up` :
+
+```
+CONTAINER ID   IMAGE                        STATUS         PORTS
+abc123         bigzaza/hello-world:latest   Up 2 minutes   0.0.0.0:8080->8080/tcp
+```
+
+<!-- Capture d'écran : docker ps sur le serveur -->
+<!-- ![Docker PS](docs/screenshots/docker-ps.png) -->
+
+### 2. Vérifier les logs du conteneur
+
+```bash
+docker logs hello-world
+```
+
+On doit voir le démarrage de Spring Boot sans erreur.
+
+### 3. Tester l'application
+
+Depuis n'importe quelle machine :
+
+```bash
+curl http://<ip-du-serveur>:8080/
 ```
 
 Réponse attendue :
@@ -256,15 +370,8 @@ Réponse attendue :
 Hello World!
 ```
 
-Vérifier l'état du conteneur sur le serveur :
-
-```bash
-docker ps
-docker logs <nom-conteneur>
-```
-
-<!-- Capture d'écran : résultat du curl et docker ps -->
-<!-- ![Vérification](docs/screenshots/deploy-check.png) -->
+<!-- Capture d'écran : résultat du curl -->
+<!-- ![Test curl](docs/screenshots/curl-test.png) -->
 
 ---
 
